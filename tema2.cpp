@@ -35,76 +35,115 @@ struct tracker_struct {
 MPI_Status status;
 
 void request_swarms(client_struct *client, unordered_map<string, vector<int>> &owners,
-        unordered_map<string, vector<string>> &remained_seg) {
-    int nr_files = client->wanted_files.size();
-    MPI_Send(&nr_files, 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
-    int i;
+        unordered_map<string, vector<string>> &remained_seg, string req_file) {
 
-    for (i = 0; i < client->wanted_files.size(); i++) {
-        char file[MAX_FILENAME];
-        strcpy(file, (client->wanted_files[i]).c_str());
-        file[client->wanted_files[i].length()] = '\0';
-        MPI_Send(file, MAX_FILENAME, MPI_CHAR, 0, 2, MPI_COMM_WORLD);
-        int nr_ids = 0;
-        MPI_Recv(&nr_ids, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        for (int j = 0; j < nr_ids; j++) {
-            int id;
-            MPI_Recv(&id, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // auto elem = find(owners.at(client->wanted_files[i]).begin(),
-            //     owners.at(client->wanted_files[i]).end(), id);
-            // if (elem == owners.at(client->wanted_files[i]).end()) {
-            owners.at(client->wanted_files[i]).push_back(id);
-            // }
-        }
+    char file[MAX_FILENAME];
+    strcpy(file, (req_file).c_str());
+    file[req_file.length()] = '\0';
+    MPI_Send(file, MAX_FILENAME, MPI_CHAR, 0, 2, MPI_COMM_WORLD);
+    int nr_ids = 0;
+    MPI_Recv(&nr_ids, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    for (int j = 0; j < nr_ids; j++) {
+        int id;
+        MPI_Recv(&id, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        owners.at(req_file).push_back(id);
+    }
 
-        int nr_seg = 0;
-        MPI_Recv(&nr_seg, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        for (int j = 0; j < nr_seg; j++) {
-            char seg_name[HASH_SIZE];
-            MPI_Recv(seg_name, HASH_SIZE, MPI_CHAR, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            seg_name[HASH_SIZE] = '\0';
-            remained_seg.at(client->wanted_files[i]).push_back(string(seg_name));
-        }
+    int nr_seg = 0;
+    MPI_Recv(&nr_seg, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
+    for (int j = 0; j < nr_seg; j++) {
+        char seg_name[HASH_SIZE];
+        MPI_Recv(seg_name, HASH_SIZE, MPI_CHAR, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        seg_name[HASH_SIZE] = '\0';
+        remained_seg.at(req_file).push_back(string(seg_name));
     }
 }
 
-void request_segments(unordered_map<string, vector<int>> &owners, string file,
-    unordered_map<string, vector<string>> remained_seg, int &cnt_seg) {
-
-    char filename[MAX_FILENAME];
-    strncpy(filename, file.c_str(), file.length());
-    filename[file.length()] = '\0';
+void request_segments(client_struct *client, unordered_map<string, vector<int>> &owners,
+    string file, unordered_map<string, vector<string>> remained_seg, int &cnt_seg) {
 
     for (auto owner = owners.at(file).begin(); owner < owners.at(file).end(); owner++) {
+
+        if (*owner == client->id) {
+            continue;
+        }
+
         char req[4];
         strcpy(req, "REQ");
         req[4] ='\0';
         MPI_Send(req, 4, MPI_CHAR, *owner, 4, MPI_COMM_WORLD);
-        char resp[3];
-        int da;
-        MPI_Recv(resp, 4, MPI_CHAR, *owner, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        // MPI_Recv(&da, 1, MPI_INT, *owner, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        char req_file[MAX_FILENAME];
+        strncpy(req_file, file.c_str(), file.length());
+        req_file[file.length()] = '\0';
+        MPI_Send(req_file, MAX_FILENAME, MPI_CHAR, *owner, 4, MPI_COMM_WORLD);
+        MPI_Send(&cnt_seg, 1, MPI_INT, *owner, 4, MPI_COMM_WORLD);
+
+        char resp[4];
+        MPI_Recv(resp, 4, MPI_CHAR, *owner, 9, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         
         if (strcmp(resp, "OK")) {
-            //MPI_Send(&cnt_seg, 1, MPI_INT, *owner, 5, MPI_COMM_WORLD);
             int i;
             for (i = cnt_seg; i < remained_seg.at(file).size(); i++) {
                 if (i > cnt_seg + 10) {
                     break;
                 }
 
+                char filename[MAX_FILENAME];
+                strncpy(filename, file.c_str(), file.length());
+                filename[file.length()] = '\0';
+
                 MPI_Send(filename, MAX_FILENAME, MPI_CHAR, *owner, 5, MPI_COMM_WORLD);
-                // char segment[32];
-                // strncpy(segment, remained_seg.at(file)[i].c_str(), 32);
-                // segment[32] = '\0';
-                // MPI_Send(segment, HASH_SIZE, MPI_CHAR, *owner, 5, MPI_COMM_WORLD);
-                MPI_Recv(resp, 4, MPI_CHAR, *owner, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                char segment[32];
+                strncpy(segment, remained_seg.at(file)[i].c_str(), 32);
+                MPI_Send(&cnt_seg, 1, MPI_INT, *owner, 5, MPI_COMM_WORLD);
+                MPI_Recv(segment, HASH_SIZE, MPI_CHAR, *owner, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                string str_seg = string(segment);
+                client->wanted_files_seg.at(file).push_back(str_seg);
             }
             cnt_seg = i;
             break;
         }
     }
+}
+
+void update_tracker(client_struct *client, string file,
+        unordered_map<string, vector<int>> &owners) {
+    char filename[MAX_FILENAME];
+    strcpy(filename, file.c_str());
+    MPI_Send(filename, MAX_FILENAME, MPI_CHAR, 0, 3, MPI_COMM_WORLD);
+
+    int nr_ids;
+    MPI_Recv(&nr_ids, 1, MPI_INT, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    for (int i = 0; i < nr_ids; i++) {
+        int id;
+        MPI_Recv(&id, 1, MPI_INT, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        int ok = 1;
+        for (int j = 0; j < owners.at(file).size(); j++) {
+            if (owners.at(file)[j] == id) {
+                ok = 0;
+            }
+        }
+        
+        if (ok) {
+            owners.at(file).push_back(id);
+        }
+    }
+}
+
+void write_file(client_struct *client, string file, vector<string> segments) {
+    string out_file = "client" + to_string(client->id) + "_" + file;
+    ofstream out(out_file);
+    for (int i = 0; i < segments.size(); i++) {
+        if (i == segments.size() - 1) {
+            out << segments[i];
+        } else {
+            out << segments[i] << endl;
+        }
+    }
+
+    out.close();
 }
 
 void *download_thread_func(void *arg)
@@ -113,29 +152,27 @@ void *download_thread_func(void *arg)
     unordered_map<string, vector<int>> owners;
     unordered_map<string, vector<string>> remained_seg;
 
-    string file = "client" + client->id;
-    ofstream fout(file);
-
     for (int i = 0; i < client->wanted_files.size(); i++) {
         owners.emplace(client->wanted_files[i], vector<int>());
         remained_seg.emplace(client->wanted_files[i], vector<string>());
     }
-    
-    request_swarms(client, owners, remained_seg);
 
-    // for (int f = 0; f < client->wanted_files.size(); f++) {
-    //     for (int i = 0; i <owners.at(client->wanted_files[f]).size(); i++) {
-    //         cout << client->id << " " << owners.at(client->wanted_files[f])[i] << " " << endl;
-    //     }
-    // }
+    char file_done[7], all_done[7];
+    strcpy(file_done, "F_DONE");
+    strcpy(all_done, "A_DONE");
 
     for (int f = 0; f < client->wanted_files.size(); f++) {
+        request_swarms(client, owners, remained_seg, client->wanted_files[f]);
         int cnt_seg = 0;
         while (cnt_seg < remained_seg.at(client->wanted_files[f]).size()) {
-            request_segments(owners, client->wanted_files[f], remained_seg, cnt_seg);
-            cout << client->id << " " << cnt_seg << endl;
+            request_segments(client, owners, client->wanted_files[f], remained_seg, cnt_seg);
+            update_tracker(client, client->wanted_files[f], owners);
         }
+        MPI_Send(file_done, 7, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
+        write_file(client, client->wanted_files[f], remained_seg.at(client->wanted_files[f]));
     }
+
+    MPI_Send(all_done, 7, MPI_CHAR, 0, 1, MPI_COMM_WORLD);
 
     return NULL;
 }
@@ -145,25 +182,43 @@ void *upload_thread_func(void *arg)
     client_struct *client = (client_struct*) arg;
     int cnt_seg;
     MPI_Status local_status;
-    char filename[MAX_FILENAME];
+    string str_file;
     char resp[3];
     resp[0] = 'O';
     resp[1] = 'K';
     resp[2] = '\0';
-    int c = 0;
 
     while (1) {
         MPI_Probe(MPI_ANY_SOURCE, 5, MPI_COMM_WORLD, &local_status);
 
         if (local_status.MPI_SOURCE != 0) {
-            //MPI_Recv(&cnt_seg, 1, MPI_INT, MPI_ANY_SOURCE, 5, MPI_COMM_WORLD, &local_status);
+            char filename[MAX_FILENAME];
             MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, local_status.MPI_SOURCE, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            MPI_Send(resp, 4, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+            str_file = string(filename);
+            
+            MPI_Recv(&cnt_seg, 1, MPI_INT, local_status.MPI_SOURCE, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
+            if (client->owned_files_seg.find(str_file) == client->owned_files_seg.end()) {
+                char segment[32];
+                string str_seg = client->wanted_files_seg.at(str_file)[cnt_seg];
+                strcpy(segment, str_seg.c_str());
+                MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+            } else {
+                char segment[32];
+                string str_seg = client->owned_files_seg.at(str_file)[cnt_seg];
+                strcpy(segment, str_seg.c_str());
+                MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+            }
+            pthread_mutex_lock(&client->mutex);
+            client->nr_clients--;
+            pthread_mutex_unlock(&client->mutex);
+        } else {
+            char done[5];
+            MPI_Recv(done, 5, MPI_CHAR, 0, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Send(done, 5, MPI_CHAR, client->id, 4, MPI_COMM_WORLD);
+            break;
         }
-        c++;
     }
-
-    client->upload_done = 1;
     return NULL;
 }
 
@@ -171,31 +226,44 @@ void *traffic_thread_func(void *arg)
 {
     client_struct *client = (client_struct*) arg;
     MPI_Status local_status;
-    // int cnt_seg;
+    while (1) {
+        MPI_Probe(MPI_ANY_SOURCE, 4, MPI_COMM_WORLD, &local_status);
+        
+        if (local_status.MPI_SOURCE == client->id) {
+            break;
+        }
 
-    while (!client->upload_done) {
         char req[4];
-        int da;
         MPI_Recv(req, 4, MPI_CHAR, MPI_ANY_SOURCE, 4, MPI_COMM_WORLD, &local_status);
+
         int id = local_status.MPI_SOURCE;
-        // MPI_Recv(&cnt_seg, 1, MPI_INT, MPI_ANY_SOURCE, 4, MPI_COMM_WORLD, &local_status);
+        char req_file[MAX_FILENAME];
+        MPI_Recv(req_file, MAX_FILENAME, MPI_CHAR, id, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        string str_file = string(req_file);
+        int cnt_seg;
+        MPI_Recv(&cnt_seg, 1, MPI_INT, id, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         char resp[3];
-        if (client->nr_clients < 2) {
-            client->nr_clients++;
-            resp[0] = 'O';
-            resp[1] = 'K';
-            da = 1;
-        } else {
-            strcpy(resp, "NO");
-            da = 0;
+
+        if ((client->wanted_files_seg.find(str_file) != client->wanted_files_seg.end()
+            && client->wanted_files_seg.at(str_file).size() <= cnt_seg)
+            || client->owned_files_seg.find(str_file) == client->owned_files_seg.end()) {
             resp[0] = 'N';
             resp[1] = 'O';
+        } else
+         if (client->nr_clients >= 2) {
+            resp[0] = 'N';
+            resp[1] = 'O';
+        } else {
+            pthread_mutex_lock(&client->mutex);
+            client->nr_clients++;
+            pthread_mutex_unlock(&client->mutex);
+            resp[0] = 'O';
+            resp[1] = 'K';
         }
         resp[2] = '\0';
 
-        MPI_Send(resp, 4, MPI_CHAR, id, 4, MPI_COMM_WORLD);
+        MPI_Send(resp, 4, MPI_CHAR, id, 9, MPI_COMM_WORLD);
     }
-
     return NULL;
 }
 
@@ -215,9 +283,7 @@ void get_data(tracker_struct &tracker, int numtasks) {
                 tracker.owners.emplace(str_name, vector<int>());
             }
 
-            // if (tracker.owners.at(str_name)) {
-                tracker.owners.at(str_name).push_back(id);
-            // }
+            tracker.owners.at(str_name).push_back(id);
 
             if (tracker.files.find(str_name) == tracker.files.end()) {
                 tracker.files.emplace(str_name, vector<string>());
@@ -232,7 +298,9 @@ void get_data(tracker_struct &tracker, int numtasks) {
                 MPI_Recv(seg_name, HASH_SIZE, MPI_CHAR, id, 1, MPI_COMM_WORLD, &status);
                 seg_name[32] = '\0';
                 string str_seg = string(seg_name);
-                tracker.files.at(str_name).push_back(str_seg);
+                if (tracker.files.at(str_name).size() != nr_seg) {
+                    tracker.files.at(str_name).push_back(str_seg);
+                }
             }
         }
     }
@@ -243,7 +311,6 @@ void send_swarm(tracker_struct &tracker, int client_id) {
     MPI_Recv(file, MAX_FILENAME, MPI_CHAR, client_id, 2, MPI_COMM_WORLD, &status);
     string str_name = string(file);
     vector<int> ids = tracker.owners.at(str_name);
-    // tracker.owners.at(str_name).push_back(status.MPI_SOURCE);
     int nr_ids = ids.size();
     MPI_Send(&nr_ids, 1, MPI_INT, client_id, 2, MPI_COMM_WORLD);
 
@@ -264,9 +331,43 @@ void send_swarm(tracker_struct &tracker, int client_id) {
     }
 }
 
+void update_client(tracker_struct &tracker, int client_id) {
+    MPI_Status local_status;
+    char file[MAX_FILENAME];
+    MPI_Recv(file, MAX_FILENAME, MPI_CHAR, client_id, 3, MPI_COMM_WORLD, &local_status);
+    string str_name = string(file);
+    cout << file << endl;
+    int ok = 0;
+    for (int j = 0; j < tracker.owners.at(str_name).size(); j++) {
+        if (tracker.owners.at(str_name)[j] == client_id) {
+            ok = 1;
+        }
+    }
+
+    if (ok) {
+        tracker.owners.at(str_name).push_back(client_id);
+    }
+
+    vector<int> ids = tracker.owners.at(str_name);
+    int nr_ids = ids.size();
+    MPI_Send(&nr_ids, 1, MPI_INT, client_id, 3, MPI_COMM_WORLD);
+
+    for (int i = 0; i < nr_ids; i++) {
+        MPI_Send(&ids[i], 1, MPI_INT, client_id, 3, MPI_COMM_WORLD);
+    }
+}
+
+void close_clients(int numtasks) {
+    char done[5];
+    strcpy(done, "DONE");
+    for (int i = 1; i < numtasks; i++) {
+        MPI_Send(done, 5, MPI_CHAR, i, 5, MPI_COMM_WORLD);
+    }
+}
+
 void tracker(int numtasks, int rank) {
     tracker_struct tracker;
-    int clients_done = 1;
+    int clients = 1;
 
     get_data(tracker, numtasks);
 
@@ -277,24 +378,30 @@ void tracker(int numtasks, int rank) {
         MPI_Send(conf, 2, MPI_CHAR , i, 3, MPI_COMM_WORLD);
     }
 
-    while (clients_done < numtasks) {
+    while (clients < numtasks) {
         MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
         if (status.MPI_TAG == 2) {
-            int nr_files;
-            MPI_Recv(&nr_files, 1, MPI_INT, clients_done, 2, MPI_COMM_WORLD , MPI_STATUS_IGNORE);
-            for (int i = 0; i < nr_files; i++) {
-                send_swarm(tracker, clients_done);
-            }
+            send_swarm(tracker, status.MPI_SOURCE);
+        } else if (status.MPI_TAG == 3) {
+            update_client(tracker, status.MPI_SOURCE);
+        } else if (status.MPI_TAG == 0) {
+            char file_done[7];
+            MPI_Recv(file_done, 7, MPI_CHAR, status.MPI_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        } else if (status.MPI_TAG == 1) {
+            char all_done[7];
+            MPI_Recv(all_done, 7, MPI_CHAR, status.MPI_SOURCE, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            clients++;
         }
-        clients_done++;
     }
+    close_clients(numtasks);
 }
 
 void read_file(int rank, client_struct &client)
 {
     int nr_owned = 0, nr_wanted = 0, nr_segments = 0;
     string nr = to_string(rank), nr_file, filename, nr_seg, segment;
-    string in_file = "../checker/tests/test2/in" + nr + ".txt";
+    // string in_file = "../checker/tests/test1/in" + nr + ".txt";
+    string in_file = "in" + nr + ".txt";
     ifstream f(in_file);
     getline(f, nr_file);
     nr_owned = stoi(nr_file);
@@ -322,8 +429,10 @@ void read_file(int rank, client_struct &client)
     for (int i = 0; i < nr_wanted; i++) {
         getline(f, filename);
         client.wanted_files.push_back(filename);
+        client.wanted_files_seg.emplace(filename, vector<string>());
     }
 
+    f.close();
 }
 
 void inform_tracker(client_struct &client) {
@@ -363,24 +472,9 @@ void peer(int numtasks, int rank) {
     pthread_mutex_init(&(client.mutex), NULL);
 
     read_file(rank, client);
-
-    // for (int i = 0; i < client.owned_files.size(); i++) {
-    //     cout << client.owned_files[i] << " " << endl;
-
-    //     auto &segments = client.owned_files_seg.at(client.owned_files[i]);
-    //     for (auto itr = segments.begin(); itr != segments.end(); ++itr) {
-    //         cout << *itr << " " << endl; 
-    //     }
-    // }
-
-    // for (int i = 0; i < client.wanted_files.size(); i++) {
-    //     cout << client.wanted_files[i] << " " << endl;
-    // }
-
     inform_tracker(client);
 
     char conf[2];
-
     MPI_Recv(conf, 2, MPI_CHAR, 0, 3, MPI_COMM_WORLD, &s);
 
     r = pthread_create(&download_thread, NULL, download_thread_func, &client);
