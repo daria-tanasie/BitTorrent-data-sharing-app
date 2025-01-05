@@ -24,7 +24,6 @@ struct client_struct {
     unordered_map<string, vector<string>> wanted_files_seg;
     int nr_clients = 0;
     pthread_mutex_t mutex;
-    int upload_done = 0;
 };
 
 struct tracker_struct {
@@ -84,9 +83,9 @@ void request_segments(client_struct *client, unordered_map<string, vector<int>> 
         MPI_Recv(resp, 4, MPI_CHAR, *owner, 9, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         
         if (strcmp(resp, "OK")) {
-            int i;
+            long unsigned int i;
             for (i = cnt_seg; i < remained_seg.at(file).size(); i++) {
-                if (i > cnt_seg + 10) {
+                if ((int)(i) > cnt_seg + 10) {
                     break;
                 }
 
@@ -102,6 +101,10 @@ void request_segments(client_struct *client, unordered_map<string, vector<int>> 
                 string str_seg = string(segment);
                 client->wanted_files_seg.at(file).push_back(str_seg);
             }
+
+            char done[5];
+            strcpy(done, "done");
+            MPI_Send(done, MAX_FILENAME, MPI_CHAR, *owner, 5, MPI_COMM_WORLD);
             cnt_seg = i;
             break;
         }
@@ -120,7 +123,7 @@ void update_tracker(client_struct *client, string file,
         int id;
         MPI_Recv(&id, 1, MPI_INT, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         int ok = 1;
-        for (int j = 0; j < owners.at(file).size(); j++) {
+        for (long unsigned int j = 0; j < owners.at(file).size(); j++) {
             if (owners.at(file)[j] == id) {
                 ok = 0;
             }
@@ -135,7 +138,7 @@ void update_tracker(client_struct *client, string file,
 void write_file(client_struct *client, string file, vector<string> segments) {
     string out_file = "client" + to_string(client->id) + "_" + file;
     ofstream out(out_file);
-    for (int i = 0; i < segments.size(); i++) {
+    for (long unsigned int i = 0; i < segments.size(); i++) {
         if (i == segments.size() - 1) {
             out << segments[i];
         } else {
@@ -152,7 +155,7 @@ void *download_thread_func(void *arg)
     unordered_map<string, vector<int>> owners;
     unordered_map<string, vector<string>> remained_seg;
 
-    for (int i = 0; i < client->wanted_files.size(); i++) {
+    for (long unsigned int i = 0; i < client->wanted_files.size(); i++) {
         owners.emplace(client->wanted_files[i], vector<int>());
         remained_seg.emplace(client->wanted_files[i], vector<string>());
     }
@@ -161,10 +164,10 @@ void *download_thread_func(void *arg)
     strcpy(file_done, "F_DONE");
     strcpy(all_done, "A_DONE");
 
-    for (int f = 0; f < client->wanted_files.size(); f++) {
+    for (long unsigned int f = 0; f < client->wanted_files.size(); f++) {
         request_swarms(client, owners, remained_seg, client->wanted_files[f]);
         int cnt_seg = 0;
-        while (cnt_seg < remained_seg.at(client->wanted_files[f]).size()) {
+        while (cnt_seg < (int)(remained_seg.at(client->wanted_files[f]).size())) {
             request_segments(client, owners, client->wanted_files[f], remained_seg, cnt_seg);
             update_tracker(client, client->wanted_files[f], owners);
         }
@@ -183,10 +186,10 @@ void *upload_thread_func(void *arg)
     int cnt_seg;
     MPI_Status local_status;
     string str_file;
-    char resp[3];
-    resp[0] = 'O';
-    resp[1] = 'K';
-    resp[2] = '\0';
+    // char resp[3];
+    // resp[0] = 'O';
+    // resp[1] = 'K';
+    // resp[2] = '\0';
 
     while (1) {
         MPI_Probe(MPI_ANY_SOURCE, 5, MPI_COMM_WORLD, &local_status);
@@ -194,24 +197,29 @@ void *upload_thread_func(void *arg)
         if (local_status.MPI_SOURCE != 0) {
             char filename[MAX_FILENAME];
             MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, local_status.MPI_SOURCE, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            str_file = string(filename);
             
-            MPI_Recv(&cnt_seg, 1, MPI_INT, local_status.MPI_SOURCE, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            
-            if (client->owned_files_seg.find(str_file) == client->owned_files_seg.end()) {
-                char segment[32];
-                string str_seg = client->wanted_files_seg.at(str_file)[cnt_seg];
-                strcpy(segment, str_seg.c_str());
-                MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+            if (!strncmp(filename, "done", 5)) {
+                pthread_mutex_lock(&client->mutex);
+                client->nr_clients--;
+                pthread_mutex_unlock(&client->mutex);
             } else {
-                char segment[32];
-                string str_seg = client->owned_files_seg.at(str_file)[cnt_seg];
-                strcpy(segment, str_seg.c_str());
-                MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+                str_file = string(filename);
+            
+                MPI_Recv(&cnt_seg, 1, MPI_INT, local_status.MPI_SOURCE, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                if (client->owned_files_seg.find(str_file) == client->owned_files_seg.end()) {
+                    char segment[32];
+                    string str_seg = client->wanted_files_seg.at(str_file)[cnt_seg];
+                    strcpy(segment, str_seg.c_str());
+                    MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+                } else {
+                    char segment[32];
+                    string str_seg = client->owned_files_seg.at(str_file)[cnt_seg];
+                    strcpy(segment, str_seg.c_str());
+                    MPI_Send(segment, HASH_SIZE, MPI_CHAR, local_status.MPI_SOURCE, 2, MPI_COMM_WORLD);
+                }
             }
-            pthread_mutex_lock(&client->mutex);
-            client->nr_clients--;
-            pthread_mutex_unlock(&client->mutex);
+            
         } else {
             char done[5];
             MPI_Recv(done, 5, MPI_CHAR, 0, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -245,7 +253,7 @@ void *traffic_thread_func(void *arg)
         char resp[3];
 
         if ((client->wanted_files_seg.find(str_file) != client->wanted_files_seg.end()
-            && client->wanted_files_seg.at(str_file).size() <= cnt_seg)
+            && (int)(client->wanted_files_seg.at(str_file).size()) <= cnt_seg)
             || client->owned_files_seg.find(str_file) == client->owned_files_seg.end()) {
             resp[0] = 'N';
             resp[1] = 'O';
@@ -260,8 +268,8 @@ void *traffic_thread_func(void *arg)
             resp[0] = 'O';
             resp[1] = 'K';
         }
-        resp[2] = '\0';
 
+        resp[2] = '\0';
         MPI_Send(resp, 4, MPI_CHAR, id, 9, MPI_COMM_WORLD);
     }
     return NULL;
@@ -298,7 +306,7 @@ void get_data(tracker_struct &tracker, int numtasks) {
                 MPI_Recv(seg_name, HASH_SIZE, MPI_CHAR, id, 1, MPI_COMM_WORLD, &status);
                 seg_name[32] = '\0';
                 string str_seg = string(seg_name);
-                if (tracker.files.at(str_name).size() != nr_seg) {
+                if ((int)(tracker.files.at(str_name).size()) != nr_seg) {
                     tracker.files.at(str_name).push_back(str_seg);
                 }
             }
@@ -336,9 +344,8 @@ void update_client(tracker_struct &tracker, int client_id) {
     char file[MAX_FILENAME];
     MPI_Recv(file, MAX_FILENAME, MPI_CHAR, client_id, 3, MPI_COMM_WORLD, &local_status);
     string str_name = string(file);
-    cout << file << endl;
     int ok = 0;
-    for (int j = 0; j < tracker.owners.at(str_name).size(); j++) {
+    for (long unsigned int j = 0; j < tracker.owners.at(str_name).size(); j++) {
         if (tracker.owners.at(str_name)[j] == client_id) {
             ok = 1;
         }
@@ -400,7 +407,7 @@ void read_file(int rank, client_struct &client)
 {
     int nr_owned = 0, nr_wanted = 0, nr_segments = 0;
     string nr = to_string(rank), nr_file, filename, nr_seg, segment;
-    // string in_file = "../checker/tests/test1/in" + nr + ".txt";
+    // string in_file = "../checker/tests/test2/in" + nr + ".txt";
     string in_file = "in" + nr + ".txt";
     ifstream f(in_file);
     getline(f, nr_file);
